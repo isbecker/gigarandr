@@ -65,7 +65,6 @@ def main():
     monitors = get_connected_monitors()
     manage_monitors(monitors, state)
     run_hook(hooks, 'sync')
-    launch_polybar(monitors, bar_name)
     save_state({monitor: True for monitor in monitors})
     run_hook(hooks, 'postsync')
 
