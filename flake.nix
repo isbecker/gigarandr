@@ -50,6 +50,7 @@
               settings = {
                 formatters = with pkgs; [
                   nixpkgs-fmt
+                  ruff
                 ];
               };
             };
