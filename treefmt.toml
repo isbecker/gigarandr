@@ -1,4 +1,4 @@
 [formatters.python]
-command = "ruff fmt"
+command = "ruff check --fix"
 includes = ["*.py"]
 
