@@ -40,17 +40,66 @@ def run_hook(hooks, stage):
     for command in hooks.get(stage, []):
         subprocess.call(command, shell=True)
 
+def get_monitor_capabilities(monitor):
+    xrandr_output = subprocess.check_output(['xrandr', '--query']).decode()
+    pattern = rf'^{monitor} connected.*?\n([\s\S]*?)(?=\n\S)'
+    match = re.search(pattern, xrandr_output, re.MULTILINE)
+    if match:
+        modes = match.group(1)
+        resolutions = []
+        for line in modes.strip().split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            if '+' in line or '*' in line:
+                line = line.replace('+', '').replace('*', '')
+            parts = line.strip().split()
+            res = parts[0]
+            refresh_rates = [float(r.replace('*', '').replace('+', '')) for r in parts[1:]]
+            max_refresh = max(refresh_rates) if refresh_rates else None
+            resolutions.append((res, max_refresh))
+        # Assuming the first resolution is the highest
+        if resolutions:
+            return resolutions[0]
+    return None
+
 def get_connected_monitors():
     output = subprocess.check_output(['xrandr', '--query']).decode()
     return [line.split()[0] for line in output.split('\n') if ' connected' in line]
 
 def manage_monitors(monitors, state):
     commands = ['xrandr']
-    for monitor in monitors:
-        commands += ['--output', monitor, '--auto']
-    for monitor in state:
-        if monitor not in monitors:
-            commands += ['--output', monitor, '--off']
+    external_monitors = [m for m in monitors if not 'eDP' in m]
+    laptop_monitor = [m for m in monitors if 'eDP' in m][0]  # Assuming there's exactly one laptop monitor
+
+    if external_monitors:
+        # Docked mode: external monitor above the laptop monitor
+        primary_set = False
+        for monitor in external_monitors:
+            res_info = get_monitor_capabilities(monitor)
+            if res_info:
+                res, refresh_rates = res_info
+                commands += ['--output', monitor, '--mode', res, '--auto', '--above', laptop_monitor]
+                if not primary_set:
+                    commands += ['--primary']
+                    primary_set = True
+        # Configure the laptop monitor
+        res_info = get_monitor_capabilities(laptop_monitor)
+        if res_info:
+            res, refresh_rates = res_info
+            commands += ['--output', laptop_monitor, '--mode', res, '--auto']
+    else:
+        # Mobile mode: only the laptop monitor active
+        res_info = get_monitor_capabilities(laptop_monitor)
+        if res_info:
+            res, refresh_rates = res_info
+            commands += ['--output', laptop_monitor, '--mode', res, '--auto']
+        else:
+            commands += ['--output', laptop_monitor, '--auto']
+    
+    for monitor in external_monitors:
+        commands += ['--output', monitor, '--off']
+
     subprocess.call(commands)
 
 def main():
