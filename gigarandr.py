@@ -98,8 +98,9 @@ def manage_monitors(monitors, state):
         else:
             commands += ['--output', laptop_monitor, '--auto']
     
-    for monitor in external_monitors:
-        commands += ['--output', monitor, '--off']
+    for monitor in state:
+        if monitor not in monitors:
+            commands += ['--output', monitor, '--off']
 
     subprocess.call(commands)
 
