@@ -15,8 +15,7 @@ def ensure_config_directory():
             "presync": ["echo 'PreSync Hook: Starting...'"],
             "sync": ["echo 'Sync Hook: Adjusting monitor settings...'"],
             "postsync": ["echo 'PostSync Hook: Clean-up operations completed.'"]
-        },
-        "bar_name": "mybar"
+        }
     }
     if not os.path.exists(config_file):
         with open(config_file, 'w') as f:
@@ -59,7 +58,6 @@ def main():
     config = load_config()
     state = load_state()
     hooks = config['hooks']
-    bar_name = config['bar_name']
 
     run_hook(hooks, 'presync')
     monitors = get_connected_monitors()
