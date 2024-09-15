@@ -1,0 +1,4 @@
+[formatters.python]
+command = "ruff fmt"
+includes = ["*.py"]
+
