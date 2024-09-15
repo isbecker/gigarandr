@@ -54,13 +54,6 @@ def manage_monitors(monitors, state):
             commands += ['--output', monitor, '--off']
     subprocess.call(commands)
 
-def launch_polybar(monitors, bar_name):
-    subprocess.call(['pkill', 'polybar'])
-    for monitor in monitors:
-        os.environ['MONITOR'] = monitor
-        subprocess.Popen(['polybar', bar_name])
-        print(f"Launching Polybar '{bar_name}' on {monitor}")
-
 def main():
     ensure_config_directory()
     config = load_config()
