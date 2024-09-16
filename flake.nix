@@ -51,6 +51,7 @@
                 formatters = with pkgs; [
                   nixpkgs-fmt
                   ruff
+                  rye
                 ];
               };
             };
