@@ -88,6 +88,24 @@ def save_state(state: Dict[str, Any]) -> None:
     except Exception as e:
         logging.error(f"Error saving state file: {e}")
 
+def match_profile(config, connected_monitors: List[Dict[str, Optional[int]]]):
+    """
+    Match the connected monitors to the best profile.
+
+    Args:
+        config: The configuration dict.
+        connected_monitors: List of currently connected monitors.
+
+    Returns:
+        The matched profile, or None if no match is found.
+    """
+    profiles = config.get('profiles', [])
+    for profile in profiles:
+        profile_monitors = profile.get('monitors', [])
+        if len(profile_monitors) == len(connected_monitors):
+            return profile
+    return None
+
 
 def run_hook(hooks: Dict[str, List[str]], stage: str) -> None:
     """Run hook commands for a given stage."""
@@ -102,6 +120,33 @@ def run_hook(hooks: Dict[str, List[str]], stage: str) -> None:
         except Exception as e:
             logging.error(f"An error occurred while running command: {command}\nError: {e}")
 
+def apply_profile(profile, connected_monitors: List[Dict[str, Optional[int]]]):
+    """
+    Apply the monitor configuration from the profile using `xrandr`.
+
+    Args:
+        profile: The profile to apply.
+    """
+    commands = ['xrandr']
+    monitors = profile.get('monitors', [])
+
+    for monitor in monitors:
+        # Resolve the monitor name based on keyword or actual name
+        name = resolve_monitor_keyword(connected_monitors, monitor['name'])
+        commands += ["--output", name, "--auto"]
+
+        if monitor.get('primary', False):
+            commands += ["--primary"]
+
+        position = monitor.get('position')
+        if position:
+            position_keyword, ref_monitor = position.split(" ", 1)
+            ref_name = resolve_monitor_keyword(connected_monitors, ref_monitor)
+            commands += [f"--{position_keyword}", ref_name]
+
+    logging.info(f"Executing: {' '.join(commands)}")
+    logging.debug(commands)
+    subprocess.call(commands)
 
 def get_connected_monitors() -> List[Dict[str, Optional[int]]]:
     """
@@ -206,6 +251,7 @@ def manage_monitors(monitors: List[Dict[str, Optional[int]]], config: Dict[str, 
     """
     commands = ['xrandr']
     monitor_configs = config.get("monitors", [])
+    logging.info(monitor_configs)
 
     for monitor_config in monitor_configs:
         keyword_name = monitor_config["name"]
@@ -236,6 +282,7 @@ def manage_monitors(monitors: List[Dict[str, Optional[int]]], config: Dict[str, 
 
     if len(commands) > 1:
         logging.info(f"Executing: {' '.join(commands)}")
+        logging.debug(commands)
         try:
             result = subprocess.run(
                 commands,
@@ -258,23 +305,30 @@ def main() -> None:
     """Main function to manage monitor configurations."""
     ensure_config_directory()
     config = load_config()
+    logging.debug(config)
     state = load_state()
+    logging.debug(state)
     hooks = config.get('hooks', {})
 
     # PreSync Phase
     run_hook(hooks, 'presync')
 
-    # Monitor management (Sync Phase)
-    monitors = get_connected_monitors()
-    if not monitors:
-        logging.error("No monitors detected. Exiting.")
-        sys.exit(1)
-    manage_monitors(monitors, config)
+    # Detect connected monitors
+    connected_monitors = get_connected_monitors()
+
+    # Match the profile based on connected monitors
+    matched_profile = match_profile(config, connected_monitors)
+    if matched_profile:
+        print(f"Matched profile: {matched_profile['name']}")
+        # Apply the profile
+        apply_profile(matched_profile, connected_monitors)
+    else:
+        print(f"No matching profile found for {len(connected_monitors)} monitors.")
 
     run_hook(hooks, 'sync')
 
     # Save the new monitor state
-    save_state({monitor["name"]: True for monitor in monitors})
+    save_state({monitor["name"]: True for monitor in connected_monitors})
 
     # PostSync Phase
     run_hook(hooks, 'postsync')
