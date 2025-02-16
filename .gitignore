@@ -1,2 +1,9 @@
 .devenv
 .direnv
+.venv
+.ruff_cache
+
+__pycache__/
+*.pyc
+.hypothesis/
+.pytest_cache/

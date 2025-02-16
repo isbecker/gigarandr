@@ -1,4 +1,39 @@
-[formatters.python]
-command = "ruff check --fix"
-includes = ["*.py"]
+[formatter.python]
+  command  = "ruff"
+  options  = ["check", "--fix"]
+  includes = ["*.py"]
 
+
+[formatter.nix]
+  command  = "nixpkgs-fmt"
+  includes = ["*.nix"]
+
+[formatter.markdown]
+  command  = "mdformat"
+  includes = ["*.md"]
+
+[formatter.toml]
+  command = "taplo"
+  options = [
+    "fmt",
+    "-o",
+    "align_entries=true",
+    "-o",
+    "align_comments=true",
+    "-o",
+    "array_trailing_comma=true",
+    "-o",
+    "array_auto_expand=true",
+    "-o",
+    "array_auto_collapse=true",
+    "-o",
+    "indent_tables=true",
+    "-o",
+    "indent_entries=true",
+  ]
+  includes = ["*.toml"]
+
+[formatter.json]
+  command  = "biome"
+  options  = ["format", "--write"]
+  includes = ["*.json"]
