@@ -357,9 +357,11 @@ class GigarandrApp:
             logger.info(f"Matched profile: {profile_name}")
             self.apply_profile(matched_profile, connected_monitors)
         else:
-            logger.info(
-                f"No matching profile found for {len(connected_monitors)} monitors."
-            )
+            logger.info(f"No matching profile found for {len(connected_monitors)} monitors.")
+
+        # New: Turn off monitors that were previously active but are now disconnected
+        self.turn_off_disconnected_monitors(connected_monitors)
+
         self.run_hook("sync")
         save_state({monitor["name"]: True for monitor in connected_monitors})
         self.run_hook("postsync")
@@ -380,6 +382,24 @@ class GigarandrApp:
             subprocess.check_call(command)
         except subprocess.CalledProcessError as e:
             logger.error(f"Error executing xrandr command: {command} => {e}")
+
+    # New method to turn off monitors that were active previously but are now disconnected
+    def turn_off_disconnected_monitors(self, connected_monitors: List[Dict[str, Optional[int]]]) -> None:
+        prev_state = load_state()
+        prev_active = set(prev_state.keys())
+        current_active = {m["name"] for m in connected_monitors if m.get("name")}
+        disconnected = prev_active - current_active
+        if disconnected:
+            cmd = [self.xrandr_bin]
+            for d in disconnected:
+                cmd.extend(["--output", d, "--off"])
+            logger.info("Turning off disconnected monitors: " + " ".join(cmd))
+            try:
+                subprocess.check_call(cmd)
+                # Update state file to only include currently connected monitors
+                save_state({m["name"]: True for m in connected_monitors if m.get("name")})
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error turning off monitors: {cmd} => {e}")
 
 
 def get_connected_monitors():

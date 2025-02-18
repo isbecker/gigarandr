@@ -197,3 +197,37 @@ def test_version_unknown(monkeypatch):
     result = runner.invoke(gigarandr.app, ["version"])
     assert result.exit_code == 0
     assert "gigarandr version: unknown" in result.output
+
+def test_turn_off_disconnected_monitors(monkeypatch):
+    import subprocess
+    import gigarandr
+
+    # Simulate previous monitor state with DP-2 and DP-4 active
+    monkeypatch.setattr(gigarandr, "load_state", lambda: {"DP-2": True, "DP-4": True})
+
+    captured_cmd = None
+    def fake_check_call(cmd, *args, **kwargs):
+        nonlocal captured_cmd
+        captured_cmd = cmd
+
+    monkeypatch.setattr(subprocess, "check_call", fake_check_call)
+
+    captured_state = None
+    def fake_save_state(state):
+        nonlocal captured_state
+        captured_state = state
+    monkeypatch.setattr(gigarandr, "save_state", fake_save_state)
+
+    # Initialize app with current configuration
+    app = gigarandr.GigarandrApp(gigarandr.load_config())
+    # Simulate current connected monitors only including DP-2
+    connected_monitors = [{"name": "DP-2", "width": 1920, "height": 1080, "default_refresh_rate": 60.0}]
+
+    app.turn_off_disconnected_monitors(connected_monitors)
+
+    # Expect that DP-4 has been turned off
+    expected_cmd = [app.xrandr_bin, "--output", "DP-4", "--off"]
+    assert captured_cmd == expected_cmd
+    
+    # Also, the saved state should be updated to only include DP-2
+    assert captured_state == {"DP-2": True}
