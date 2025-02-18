@@ -86,6 +86,24 @@ def test_get_connected_monitors_with_random_output_no_connected(input_text, monk
     else:
         assert isinstance(monitors, list)
 
+def test_get_connected_monitors_fallback_resolution(monkeypatch):
+    # Test fallback to first indented mode line when resolution is not on connection line
+    fake_fallback_output = """
+Screen 0: minimum 320 x 200, current 3840 x 2160, maximum 16384 x 16384
+DP-1 connected (normal left inverted right x axis y axis)
+   2560x1440    165.00*+ 144.00
+"""
+    import subprocess
+    from gigarandr import get_connected_monitors
+    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: fake_fallback_output)
+    monitors = get_connected_monitors()
+    assert len(monitors) == 1
+    mon = monitors[0]
+    assert mon["name"] == "DP-1"
+    assert mon["width"] == 2560
+    assert mon["height"] == 1440
+    assert mon["default_refresh_rate"] == 165.00
+
 @given(st.builds(gigarandr.load_config))
 def test_build_xrandr_command_with_sample_config(config):
     app = GigarandrApp(config)

@@ -17,7 +17,7 @@ from loguru import logger
 from omegaconf import OmegaConf, DictConfig, ListConfig
 from dataclasses import dataclass, field
 
-logger.add(sys.stderr, colorize=True, level="DEBUG", format="<green>{time}</green> <level>{message}</level>")
+logger.add(sys.stderr, colorize=True, level="INFO", format="<green>{time}</green> <level>{message}</level>")
 
 app = typer.Typer()
 
@@ -168,6 +168,9 @@ class GigarandrApp:
                 else:
                     cycle_graph[key] = (flag, ref)
             full_graph = cycle_graph
+        logger.debug(f"Resolved mapping: {resolved_mapping}")
+        logger.debug(f"Full graph: {full_graph}")
+        logger.debug(f"Cycle nodes: {cycle_nodes}")
         cmd_args = self.build_command_segments(profile, connected_monitors, resolved_mapping, full_graph)
         logger.debug(f"Generated xrandr command: {cmd_args}")
         return cmd_args
@@ -191,8 +194,10 @@ class GigarandrApp:
                         break
             if not resolved:
                 resolved = self.resolve_monitor_keyword(connected_monitors, m_key)
-            if resolved:
+            if resolved and resolved not in resolved_mapping.values():
                 resolved_mapping[m_key] = resolved
+            else:
+                logger.warning(f"Monitor {m_key} not resolved.")
         return resolved_mapping
 
     def build_full_graph(self, profile) -> Dict[str, Tuple[str, str]]:
@@ -250,7 +255,15 @@ class GigarandrApp:
             if monitor_info and monitor_info["width"] and monitor_info["height"]:
                 mode_str = f"{monitor_info['width']}x{monitor_info['height']}"
                 segment += ["--mode", mode_str]
-                refresh_rate = monitor.get("refresh_rate") or monitor_info.get("default_refresh_rate")
+                configured_rate = monitor.get("refresh_rate")
+                if configured_rate is not None:
+                    if configured_rate not in monitor_info.get("supported_refresh_rates", []):
+                        logger.warning(f"Configured refresh rate {configured_rate} not supported for {resolved_name}, using default {monitor_info.get('default_refresh_rate')}")
+                        refresh_rate = monitor_info.get("default_refresh_rate")
+                    else:
+                        refresh_rate = configured_rate
+                else:
+                    refresh_rate = monitor_info.get("default_refresh_rate")
                 logger.debug(f"Monitor {resolved_name}: mode {mode_str}, refresh rate {refresh_rate}")
                 if refresh_rate:
                     segment += ["--rate", f"{refresh_rate:.2f}"]
@@ -292,31 +305,49 @@ class GigarandrApp:
                         width = height = None
                 else:
                     width = height = None
-                max_refresh = None
+
+                refresh_rates = []
+                default_refresh = None
                 j = i + 1
                 while j < len(lines) and lines[j].startswith(" "):
                     tokens = lines[j].strip().split()
+                    # Fallback: if resolution not found on the connection line, try using the first mode line
+                    if resolution is None and tokens and re.match(r'^\d+x\d+$', tokens[0]):
+                        resolution = tokens[0]
+                        try:
+                            width_str, height_str = resolution.split("x")
+                            width = int(width_str)
+                            height = int(height_str)
+                        except ValueError:
+                            width = height = None
+
                     if tokens and tokens[0] == resolution:
                         for token in tokens[1:]:
+                            if '*' in token:
+                                try:
+                                    default_refresh = float(token.replace('*', '').strip("+"))
+                                except ValueError:
+                                    pass
                             try:
                                 val = float(token.strip("*+"))
-                                if (max_refresh is None) or (val > max_refresh):
-                                    max_refresh = val
+                                refresh_rates.append(val)
                             except ValueError:
                                 continue
                         break
                     j += 1
+                chosen_refresh = default_refresh if default_refresh is not None else (max(refresh_rates) if refresh_rates else None)
                 monitors.append({
                     "name": name,
                     "width": width,
                     "height": height,
-                    "default_refresh_rate": max_refresh,
+                    "default_refresh_rate": chosen_refresh,
+                    "supported_refresh_rates": refresh_rates,
                 })
             i += 1
         return monitors
 
     def resolve_monitor_keyword(self, connected_monitors: List[Dict[str, Any]], keyword: str) -> Optional[str]:
-        if (keyword.lower() == "largest"):
+        if keyword.lower() == "largest":
             best_monitor = None
             best_area = 0
             for m in connected_monitors:
