@@ -5,6 +5,9 @@ import subprocess
 import json
 from gigarandr import load_config, load_state, match_profile, GigarandrApp, get_connected_monitors, merge_config
 from pathlib import Path
+from typer.testing import CliRunner
+
+runner = CliRunner()
 
 @pytest.fixture
 def config():
@@ -172,3 +175,25 @@ def test_run_config_unwritable(tmp_path: Path):
     assert cfg is not None
     # Optionally, we can check that the profile remains unchanged
     assert cfg.get("profiles", []) == []
+
+def test_version_known_version(monkeypatch):
+    """Test version command returns known version when package is found."""
+    import importlib.metadata
+    def fake_version(pkg):
+        return "1.0.0"
+    monkeypatch.setattr(importlib.metadata, "version", fake_version)
+    result = runner.invoke(gigarandr.app, ["version"])
+    assert result.exit_code == 0
+    assert "gigarandr version: 1.0.0" in result.output
+
+
+def test_version_unknown(monkeypatch):
+    """Test version command returns 'unknown' when package is not found."""
+    import importlib.metadata
+    from importlib.metadata import PackageNotFoundError
+    def fake_version(pkg):
+        raise PackageNotFoundError
+    monkeypatch.setattr(importlib.metadata, "version", fake_version)
+    result = runner.invoke(gigarandr.app, ["version"])
+    assert result.exit_code == 0
+    assert "gigarandr version: unknown" in result.output

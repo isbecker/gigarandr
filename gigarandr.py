@@ -638,6 +638,21 @@ def show_config_cmd(
     raise typer.Exit()
 
 
+@app.command()
+def version():
+    """Display the installed version of gigarandr using importlib.metadata."""
+    import sys
+    if sys.version_info >= (3, 8):
+        from importlib.metadata import version, PackageNotFoundError
+    else:
+        from importlib_metadata import version, PackageNotFoundError
+    try:
+        ver = version('gigarandr')
+    except PackageNotFoundError:
+        ver = 'unknown'
+    typer.echo(f"gigarandr version: {ver}")
+
+
 @logger.catch
 def main():
     """Main entry point to run the Typer CLI with loguru exception catching."""
