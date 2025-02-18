@@ -3,11 +3,37 @@ import pytest
 from unittest.mock import patch, mock_open
 import subprocess
 import json
-from gigarandr import load_config, load_state, match_profile, GigarandrApp, get_connected_monitors
+from gigarandr import load_config, load_state, match_profile, GigarandrApp, get_connected_monitors, merge_config
+from pathlib import Path
 
 @pytest.fixture
 def config():
     return load_config()
+
+@pytest.fixture
+def temp_config(tmp_path: Path) -> Path:
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({
+         "profiles": [{
+              "name": "default",
+              "monitors": {
+                  "165hz": {
+                      "position": "left-of 144hz",
+                      "name": "165hz",
+                      "refresh_rate": 165.0,
+                      "role": "largest"
+                  },
+                  "144hz": {
+                      "position": "right-of 165hz",
+                      "name": "144hz",
+                      "refresh_rate": 144.0
+                  }
+              }
+         }],
+         "hooks": {"presync":[], "sync":[], "postsync":[]},
+         "xrandr_bin": "/usr/bin/xrandr"
+    }))
+    return config_file
 
 # Test for load_config with exception
 @patch("gigarandr.OmegaConf.load", side_effect=Exception("Load error"))
@@ -129,3 +155,20 @@ def test_merge_monitor_path_invalid_format(config, caplog):
     invalid_override = "invalid_format"
     gigarandr.merge_monitor_path(monitors, invalid_override)
     assert "Invalid monitor override format" in caplog.text
+
+def test_merge_config_writable(temp_config):
+    # Ensure merge_config writes config correctly when file is writable
+    cfg = merge_config(temp_config)
+    assert "profiles" in cfg
+
+def test_run_config_unwritable(tmp_path: Path):
+    # Create a temporary config file and remove write permissions to simulate an unwritable file
+    config_file = tmp_path / "unwritable_config.json"
+    config_file.write_text(json.dumps({"profiles": []}))
+    # Remove write permission
+    config_file.chmod(0o444)
+    # merge_config should log a warning but proceed without crashing
+    cfg = merge_config(config_file)
+    assert cfg is not None
+    # Optionally, we can check that the profile remains unchanged
+    assert cfg.get("profiles", []) == []

@@ -535,8 +535,11 @@ def run(
     
     container_conf = OmegaConf.to_container(merged_conf, resolve=True)
     cf = config if config is not None else DEFAULT_CONFIG_FILE
-    with cf.open("w") as f:
-        json.dump(container_conf, f, indent=4)
+    try:
+        with cf.open("w") as f:
+            json.dump(container_conf, f, indent=4)
+    except Exception as e:
+        logger.warning(f"Cannot write merged config to {cf}: {e}. Proceeding without writing.")
     
     app_instance = GigarandrApp(merged_conf)
     app_instance.dry_run = dry_run
