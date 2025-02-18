@@ -7,24 +7,20 @@ import sys
 import subprocess
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Tuple, Union
 import os
 import yaml
 import typer
 import re
 from loguru import logger
 
-# Import for CLI config merging
 from omegaconf import OmegaConf, DictConfig, ListConfig
 from dataclasses import dataclass, field
 
-# Set up logging
 logger.add(sys.stderr, colorize=True, level="DEBUG", format="<green>{time}</green> <level>{message}</level>")
 
-# Create Typer app
 app = typer.Typer()
 
-# Configuration paths
 CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "gigarandr"
 )
@@ -125,10 +121,12 @@ def load_state() -> Dict[str, Any]:
 def save_state(state: Dict[str, Any]) -> None:
     """Write the current monitor state to disk as JSON."""
     try:
+        json_module = __import__('json')
         with STATE_FILE.open("w") as f:
-            json.dump(state, f, indent=4)
+            json_module.dump(state, f, indent=4)
     except Exception as e:
         logger.error(f"Error saving state file: {e}")
+        raise e
 
 
 def match_profile(config, connected_monitors: List[Dict[str, Optional[int]]]):
@@ -152,106 +150,117 @@ class GigarandrApp:
     def build_xrandr_command(
         self, profile, connected_monitors: List[Dict[str, Optional[int]]]
     ) -> List[str]:
-        commands = [self.xrandr_bin]
+        resolved_mapping = self.resolve_monitors(profile, connected_monitors)
+        full_graph = self.build_full_graph(profile)
+        graph_mapping = {k: v[1] for k, v in full_graph.items()}
+        cycle_nodes = self.detect_cycles(graph_mapping)
+        if cycle_nodes:
+            logger.warning(f"Cycle detected in monitor positioning for monitors: {cycle_nodes}. Resolving by keeping first encountered edge.")
+            processed = set()
+            cycle_graph = {}
+            for key, (flag, ref) in full_graph.items():
+                if key in cycle_nodes and ref in cycle_nodes and full_graph.get(ref, (None, None))[1] == key:
+                    # bidirectional cycle edge
+                    if key not in processed and ref not in processed:
+                        cycle_graph[key] = (flag, ref)
+                        processed.add(key)
+                    # skip additional edge
+                else:
+                    cycle_graph[key] = (flag, ref)
+            full_graph = cycle_graph
+        cmd_args = self.build_command_segments(profile, connected_monitors, resolved_mapping, full_graph)
+        logger.debug(f"Generated xrandr command: {cmd_args}")
+        return cmd_args
+
+    def resolve_monitors(self, profile, connected_monitors: List[Dict[str, Optional[int]]]) -> Dict[str, str]:
         monitors = profile.get("monitors", {})
         resolved_mapping = {}
         for m_key, mon in monitors.items():
             resolved = None
-            if mon.get("name") and any(cm["name"] == mon["name"] for cm in connected_monitors):
+            if (mon.get("name") and any(cm["name"] == mon["name"] for cm in connected_monitors)):
                 resolved = mon["name"]
             elif mon.get("role") == "largest":
                 resolved = self.resolve_monitor_keyword(connected_monitors, "largest")
-            elif mon.get("role") and any(cm["name"] == mon["role"] for cm in connected_monitors):
+            elif (mon.get("role") and any(cm["name"] == mon["role"] for cm in connected_monitors)):
                 resolved = mon["role"]
             elif mon.get("refresh_rate") is not None:
                 desired_rate = float(mon["refresh_rate"])
                 for cm in connected_monitors:
-                    if cm.get("default_refresh_rate") is not None and abs(cm["default_refresh_rate"] - desired_rate) < 0.1:
+                    if (cm.get("default_refresh_rate") is not None and abs(cm["default_refresh_rate"] - desired_rate) < 0.1):
                         resolved = cm["name"]
                         break
             if not resolved:
                 resolved = self.resolve_monitor_keyword(connected_monitors, m_key)
             if resolved:
                 resolved_mapping[m_key] = resolved
+        return resolved_mapping
 
-        def detect_cycles(graph: Dict[str, str]) -> set:
-            cycle_nodes = set()
-            def dfs(node, visited, stack):
-                if node in stack:
-                    cycle_nodes.update(stack)
-                    return
-                if node in visited:
-                    return
-                visited.add(node)
-                stack.add(node)
-                if node in graph:
-                    dfs(graph[node], visited, stack)
-                stack.remove(node)
-            visited = set()
-            for n in graph:
-                dfs(n, visited, set())
-            return cycle_nodes
-
-        edges = []
+    def build_full_graph(self, profile) -> Dict[str, Tuple[str, str]]:
+        monitors = profile.get("monitors", {})
+        full_graph = {}
         for monitor_key, monitor in monitors.items():
             pos = monitor.get("position")
             if pos:
                 m_rel = re.match(r"^(left-of|right-of|above|below|same-as)\s+(\S+)$", pos.strip())
                 if m_rel:
                     flag, ref_key = m_rel.groups()
-                    edges.append((monitor_key, (flag, ref_key)))
-        adjacency = {}
+                    full_graph[monitor_key] = (flag, ref_key)
+        return full_graph
 
-        def creates_cycle(start, end):
-            stack = [end]
-            visited = set()
-            while stack:
-                node = stack.pop()
-                if node == start:
-                    return True
-                if node in adjacency:
-                    nxt = adjacency[node]
-                    if nxt not in visited:
-                        visited.add(nxt)
-                        stack.append(nxt)
-            return False
+    def detect_cycles(self, graph: Dict[str, str]) -> set:
+        cycle_nodes = set()
+        def dfs(node, visited, stack):
+            if node in stack:
+                cycle_nodes.update(stack)
+                return
+            if node in visited:
+                return
+            visited.add(node)
+            stack.add(node)
+            if node in graph:
+                dfs(graph[node], visited, stack)
+            stack.remove(node)
+        visited = set()
+        for n in graph:
+            dfs(n, visited, set())
+        return cycle_nodes
 
-        for src, (flag, dst) in edges:
-            if not creates_cycle(src, dst):
-                adjacency[src] = dst
-            else:
-                logger.warning(f"Partial skip to avoid cycle: {src} --{flag} {dst}")
-
+    def build_command_segments(
+        self, profile, connected_monitors: List[Dict[str, Optional[int]]], 
+        resolved_mapping: Dict[str, str], full_graph: Dict[str, Tuple[str, str]]
+    ) -> List[str]:
+        monitors = profile.get("monitors", {})
+        cmd_args = [self.xrandr_bin]
         for monitor_key, monitor in monitors.items():
             resolved_name = resolved_mapping.get(monitor_key)
             if not resolved_name:
                 logger.warning(f"Monitor {monitor_key} not resolved.")
                 continue
+
+            segment = ["--output", resolved_name]
+            if monitor_key in full_graph:
+                rel, dst = full_graph[monitor_key]
+                ref_name = resolved_mapping.get(dst) or self.resolve_monitor_keyword(connected_monitors, dst)
+                if ref_name:
+                    segment += [f"--{rel}", ref_name]
+                else:
+                    logger.warning(f"Reference monitor '{dst}' not found.")
+
             monitor_info = next((m for m in connected_monitors if m["name"] == resolved_name), None)
             if monitor_info and monitor_info["width"] and monitor_info["height"]:
                 mode_str = f"{monitor_info['width']}x{monitor_info['height']}"
-                commands += ["--output", resolved_name, "--mode", mode_str]
+                segment += ["--mode", mode_str]
                 refresh_rate = monitor.get("refresh_rate") or monitor_info.get("default_refresh_rate")
+                logger.debug(f"Monitor {resolved_name}: mode {mode_str}, refresh rate {refresh_rate}")
                 if refresh_rate:
-                    commands += ["--rate", str(refresh_rate)]
+                    segment += ["--rate", f"{refresh_rate:.2f}"]
             else:
-                commands += ["--output", resolved_name, "--mode", "unknown"]
+                segment += ["--mode", "unknown"]
             if monitor.get("primary", False):
-                commands += ["--primary"]
-            if monitor_key in adjacency:
-                flag = re.match(r"^(left-of|right-of|above|below|same-as)", monitor.get("position", ""))
-                if flag:
-                    rel = flag.group(1)
-                    dst = adjacency[monitor_key]
-                    ref_name = resolved_mapping.get(dst) or self.resolve_monitor_keyword(connected_monitors, dst)
-                    if ref_name:
-                        commands += [f"--{rel}", ref_name]
-                    else:
-                        logger.warning(f"Reference monitor '{dst}' not found.")
-            elif monitor.get("position"):
-                logger.warning(f"Relative position for '{monitor_key}' not applied (cycle or invalid).")
+                segment += ["--primary"]
 
-        return commands
+            cmd_args += segment
+        return cmd_args
 
     def get_connected_monitors(self) -> List[Dict[str, Optional[int]]]:
         try:
@@ -307,7 +316,7 @@ class GigarandrApp:
         return monitors
 
     def resolve_monitor_keyword(self, connected_monitors: List[Dict[str, Any]], keyword: str) -> Optional[str]:
-        if keyword.lower() == "largest":
+        if (keyword.lower() == "largest"):
             best_monitor = None
             best_area = 0
             for m in connected_monitors:
@@ -390,6 +399,15 @@ def merge_config(config_file: Optional[Path] = None) -> AppConfig:
     """Merge and return the configuration from file, applying any needed updates."""
     ensure_config_directory()
     cf = config_file if config_file is not None else DEFAULT_CONFIG_FILE
+    if not cf.exists() or cf.stat().st_size == 0:
+        logger.warning(f"Configuration file {cf} does not exist or is empty. Initializing with default values.")
+        default_conf = OmegaConf.structured(AppConfig())
+        try:
+            with cf.open("w") as f:
+                f.write(OmegaConf.to_yaml(default_conf))
+        except Exception as e:
+            logger.warning(f"Could not write default config to {cf}: {e}")
+        return default_conf
     base_conf = OmegaConf.load(str(cf))
     if "profiles" in base_conf:
         for idx, profile in enumerate(base_conf.profiles):
@@ -399,15 +417,21 @@ def merge_config(config_file: Optional[Path] = None) -> AppConfig:
                     monitors[key]["name"] = key
             base_conf.profiles[idx].monitors = monitors
     container_conf = OmegaConf.to_container(base_conf, resolve=True)
-    with cf.open("w") as f:
-        json.dump(container_conf, f, indent=4)
-    return base_conf
+    try:
+        with cf.open("w") as f:
+            json.dump(container_conf, f, indent=4)
+    except Exception as e:
+        logger.warning(f"Could not write merged config to file {cf}: {e}")
+    return OmegaConf.create(container_conf)
 
 
 def merge_monitor_override(conf_monitors: Dict[str, Any], override: str) -> None:
     """Merge a JSON-based monitor override into the existing monitor config."""
     try:
         monitor_data = json.loads(override)
+        if not isinstance(monitor_data, dict):
+            logger.error(f"Invalid monitor override JSON: {override}")
+            return
     except json.JSONDecodeError:
         logger.error(f"Invalid monitor override JSON: {override}")
         return

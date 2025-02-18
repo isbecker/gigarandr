@@ -1,6 +1,6 @@
 [project]
   name            = "gigarandr"
-  version         = "0.4.1"
+  version         = "0.4.2"
   description     = "Add your description here"
   readme          = "README.md"
   requires-python = ">=3.12"
@@ -12,4 +12,8 @@
 
 
 [tool.uv]
-  dev-dependencies = ["hypothesis>=6.125.3", "pytest>=8.3.4"]
+  dev-dependencies = [
+    "hypothesis>=6.125.3",
+    "pytest-cov>=6.0.0",
+    "pytest>=8.3.4",
+  ]
